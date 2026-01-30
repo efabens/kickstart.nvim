@@ -91,7 +91,7 @@ vim.g.mapleader = ' '
 vim.g.maplocalleader = ' '
 
 -- Set to true if you have a Nerd Font installed and selected in the terminal
-vim.g.have_nerd_font = false
+vim.g.have_nerd_font = true
 
 -- [[ Setting options ]]
 -- See `:help vim.o`
@@ -102,7 +102,7 @@ vim.g.have_nerd_font = false
 vim.o.number = true
 -- You can also add relative line numbers, to help with jumping.
 --  Experiment for yourself to see if you like it!
--- vim.o.relativenumber = true
+vim.o.relativenumber = true
 
 -- Enable mouse mode, can be useful for resizing splits for example!
 vim.o.mouse = 'a'
@@ -173,8 +173,26 @@ vim.o.confirm = true
 --  See `:help hlsearch`
 vim.keymap.set('n', '<Esc>', '<cmd>nohlsearch<CR>')
 
+-- return to normal mode
+vim.keymap.set('i', 'jj', '<Esc>')
+
 -- Diagnostic keymaps
 vim.keymap.set('n', '<leader>q', vim.diagnostic.setloclist, { desc = 'Open diagnostic [Q]uickfix list' })
+
+-- Quit all
+vim.keymap.set('n', '<leader>Q', '<cmd>qa<CR>', { desc = '[Q]uit all' })
+
+-- Vertical split with empty buffer
+vim.keymap.set('n', '|', '<cmd>vnew<CR>', { desc = 'Vertical split (new buffer)' })
+vim.keymap.set('n', '_', '<cmd>new<CR>', { desc = 'Horizontal split (new buffer)' })
+
+-- Close current split
+vim.keymap.set('n', '<leader>x', '<cmd>close<CR>', { desc = 'Close split' })
+
+-- Simple buffer tabs using built-in tabline
+vim.o.showtabline = 2
+vim.keymap.set('n', '<S-h>', '<cmd>bprevious<CR>', { desc = 'Prev buffer' })
+vim.keymap.set('n', '<S-l>', '<cmd>bnext<CR>', { desc = 'Next buffer' })
 
 -- Exit terminal mode in the builtin terminal with a shortcut that is a bit easier
 -- for people to discover. Otherwise, you normally need to press <C-\><C-n>, which
@@ -305,6 +323,8 @@ require('lazy').setup({
       -- delay between pressing a key and opening which-key (milliseconds)
       -- this setting is independent of vim.o.timeoutlen
       delay = 0,
+      -- Sort alphabetically (lowercase first)
+      sort = { 'alphanum', 'group', 'mod' },
       icons = {
         -- set icon mappings to true if you have a Nerd Font
         mappings = vim.g.have_nerd_font,
@@ -346,7 +366,12 @@ require('lazy').setup({
       spec = {
         { '<leader>s', group = '[S]earch' },
         { '<leader>t', group = '[T]oggle' },
-        { '<leader>h', group = 'Git [H]unk', mode = { 'n', 'v' } },
+
+        { '<leader>g', group = '[G]it', mode = { 'n', 'v' } },
+        { '<leader>b', group = '[B]uffer' },
+        { '<leader>S', group = '[S]ession' },
+        { '<leader>l', group = '[L]SP' },
+        { 'gr', group = '[G]oto/[R]ename' },
       },
     },
   },
@@ -459,6 +484,14 @@ require('lazy').setup({
       vim.keymap.set('n', '<leader>sn', function()
         builtin.find_files { cwd = vim.fn.stdpath 'config' }
       end, { desc = '[S]earch [N]eovim files' })
+
+      -- Search with file type filter (prompts for glob pattern)
+      vim.keymap.set('n', '<leader>sG', function()
+        local glob = vim.fn.input 'Glob pattern: '
+        if glob ~= '' then
+          builtin.live_grep { glob_pattern = glob }
+        end
+      end, { desc = '[S]earch [G]rep with glob filter' })
     end,
   },
 
@@ -698,6 +731,25 @@ require('lazy').setup({
             },
           },
         },
+
+        terraformls = {
+          root_dir = require('lspconfig.util').root_pattern('.terraform', '.git', 'main.tf'),
+          settings = {
+            terraform = {
+              indexing = {
+                ignoreDirectoryNames = {
+                  'env',
+                  'venv',
+                  '.venv',
+                  'node_modules',
+                  '__pycache__',
+                  '.git',
+                  'site-packages',
+                },
+              },
+            },
+          },
+        },
       }
 
       -- Ensure the servers and tools above are installed
@@ -917,22 +969,59 @@ require('lazy').setup({
       -- - saiw) - [S]urround [A]dd [I]nner [W]ord [)]Paren
       -- - sd'   - [S]urround [D]elete [']quotes
       -- - sr)'  - [S]urround [R]eplace [)] [']
-      require('mini.surround').setup()
+      require('mini.surround').setup {
+  mappings = {
+    add = 'gsa',
+    delete = 'gsd',
+    replace = 'gsr',
+    find = 'gsf',
+    find_left = 'gsF',
+    highlight = 'gsh',
+    update_n_lines = 'gsn',
+  },
+}
 
       -- Simple and easy statusline.
       --  You could remove this setup call if you don't like it,
       --  and try some other statusline plugin
       local statusline = require 'mini.statusline'
-      -- set use_icons to true if you have a Nerd Font
-      statusline.setup { use_icons = vim.g.have_nerd_font }
 
-      -- You can configure sections in the statusline by overriding their
-      -- default behavior. For example, here we set the section for
-      -- cursor location to LINE:COLUMN
-      ---@diagnostic disable-next-line: duplicate-set-field
-      statusline.section_location = function()
-        return '%2l:%-2v'
+      local function shorten_path()
+        local path = vim.fn.expand '%:.'
+        if path == '' then
+          return '[No Name]'
+        end
+        local parts = vim.split(path, '/')
+        if #parts <= 2 then
+          return path
+        end
+        for i = 1, #parts - 1 do
+          parts[i] = parts[i]:sub(1, 1)
+        end
+        return table.concat(parts, '/')
       end
+
+      statusline.setup {
+        use_icons = vim.g.have_nerd_font,
+        content = {
+          active = function()
+            local mode, mode_hl = statusline.section_mode { trunc_width = 120 }
+            local diagnostics = statusline.section_diagnostics { trunc_width = 75 }
+            local filename = shorten_path()
+            local location = '%2l:%-2v'
+
+            return statusline.combine_groups {
+              { hl = mode_hl, strings = { mode } },
+              { hl = 'MiniStatuslineDevinfo', strings = { diagnostics } },
+              '%<',
+              { hl = 'MiniStatuslineFilename', strings = { filename } },
+              '%=',
+              { hl = 'MiniStatuslineFileinfo', strings = { vim.bo.filetype } },
+              { hl = mode_hl, strings = { location } },
+            }
+          end,
+        },
+      }
 
       -- ... and there is more!
       --  Check out: https://github.com/echasnovski/mini.nvim
@@ -977,14 +1066,14 @@ require('lazy').setup({
   -- require 'kickstart.plugins.indent_line',
   -- require 'kickstart.plugins.lint',
   -- require 'kickstart.plugins.autopairs',
-  -- require 'kickstart.plugins.neo-tree',
-  -- require 'kickstart.plugins.gitsigns', -- adds gitsigns recommend keymaps
+  require 'kickstart.plugins.neo-tree',
+  require 'kickstart.plugins.gitsigns', -- adds gitsigns recommend keymaps
 
   -- NOTE: The import below can automatically add your own plugins, configuration, etc from `lua/custom/plugins/*.lua`
   --    This is the easiest way to modularize your config.
   --
   --  Uncomment the following line and add your plugins to `lua/custom/plugins/*.lua` to get going.
-  -- { import = 'custom.plugins' },
+  { import = 'custom.plugins' },
   --
   -- For additional information with loading, sourcing and examples see `:help lazy.nvim-🔌-plugin-spec`
   -- Or use telescope!

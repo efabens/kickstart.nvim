@@ -182,6 +182,45 @@ vim.keymap.set('n', '<leader>q', vim.diagnostic.setloclist, { desc = 'Open diagn
 -- Quit all
 vim.keymap.set('n', '<leader>Q', '<cmd>qa<CR>', { desc = '[Q]uit all' })
 
+-- Toggle spell checking
+vim.keymap.set('n', '<leader>ts', '<cmd>set spell!<CR>', { desc = '[T]oggle [S]pell' })
+
+-- Collect all spelling errors into quickfix list
+vim.keymap.set('n', '<leader>sq', function()
+  local qf_entries = {}
+  local bufnr = vim.api.nvim_get_current_buf()
+  local save_cursor = vim.api.nvim_win_get_cursor(0)
+  local seen = {}
+
+  vim.cmd 'normal! gg0'
+  local first_pos = nil
+  while true do
+    vim.cmd 'normal! ]s'
+    local pos = vim.api.nvim_win_get_cursor(0)
+    local key = pos[1] .. ':' .. pos[2]
+
+    if seen[key] then
+      break
+    end
+    seen[key] = true
+
+    if first_pos == nil then
+      first_pos = key
+    end
+
+    local word = vim.fn.expand '<cword>'
+    table.insert(qf_entries, { bufnr = bufnr, lnum = pos[1], col = pos[2] + 1, text = word })
+  end
+
+  vim.api.nvim_win_set_cursor(0, save_cursor)
+  vim.fn.setqflist(qf_entries, 'r')
+  if #qf_entries > 0 then
+    vim.cmd 'copen'
+  else
+    print 'No spelling errors found'
+  end
+end, { desc = '[S]pell [Q]uickfix' })
+
 -- Vertical split with empty buffer
 vim.keymap.set('n', '|', '<cmd>vnew<CR>', { desc = 'Vertical split (new buffer)' })
 vim.keymap.set('n', '_', '<cmd>new<CR>', { desc = 'Horizontal split (new buffer)' })
@@ -234,6 +273,20 @@ vim.api.nvim_create_autocmd('TextYankPost', {
   group = vim.api.nvim_create_augroup('kickstart-highlight-yank', { clear = true }),
   callback = function()
     vim.hl.on_yank()
+  end,
+})
+
+-- Spell checking settings
+vim.opt.spelllang = 'en_us'
+vim.opt.spelloptions = 'camel'
+
+-- Enable spellchecking for markdown and text files
+vim.api.nvim_create_autocmd('FileType', {
+  desc = 'Enable spellchecking for prose files',
+  group = vim.api.nvim_create_augroup('kickstart-spell', { clear = true }),
+  pattern = { 'markdown', 'text', 'gitcommit' },
+  callback = function()
+    vim.opt_local.spell = true
   end,
 })
 

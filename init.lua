@@ -151,6 +151,15 @@ vim.o.splitbelow = true
 --   and `:help lua-options-guide`
 vim.o.list = true
 vim.opt.listchars = { tab = '» ', trail = '·', nbsp = '␣' }
+vim.opt.fillchars = {
+  vert = '┃',
+  horiz = '━',
+  horizup = '┻',
+  horizdown = '┳',
+  vertleft = '┫',
+  vertright = '┣',
+  verthoriz = '╋',
+}
 
 -- Preview substitutions live, as you type!
 vim.o.inccommand = 'split'
@@ -184,6 +193,23 @@ vim.keymap.set('n', '<leader>Q', '<cmd>qa<CR>', { desc = '[Q]uit all' })
 
 -- Toggle spell checking
 vim.keymap.set('n', '<leader>ts', '<cmd>set spell!<CR>', { desc = '[T]oggle [S]pell' })
+
+local function insert_rpaste()
+  local lines = vim.fn.systemlist('/Users/efabens/code/scripts/rpaste')
+  if vim.v.shell_error ~= 0 then
+    vim.notify('rpaste failed', vim.log.levels.ERROR)
+    return
+  end
+
+  local bufnr = vim.api.nvim_get_current_buf()
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local row = cursor[1]
+  vim.api.nvim_buf_set_lines(bufnr, row - 1, row - 1, false, lines)
+  vim.api.nvim_win_set_cursor(0, { row, 0 })
+end
+
+vim.api.nvim_create_user_command('RPaste', insert_rpaste, { desc = 'Insert rpaste output at the cursor line' })
+vim.keymap.set('n', '<leader>pr', insert_rpaste, { desc = '[P]aste [R]paste at cursor' })
 
 -- Collect all spelling errors into quickfix list
 vim.keymap.set('n', '<leader>sq', function()
@@ -289,6 +315,63 @@ vim.api.nvim_create_autocmd('FileType', {
     vim.opt_local.spell = true
   end,
 })
+
+local function set_prose_window_options(win)
+  vim.wo[win].wrap = true
+  vim.wo[win].linebreak = true
+  vim.wo[win].breakindent = true
+  vim.wo[win].colorcolumn = '120'
+end
+
+local scratch_buf
+
+vim.api.nvim_create_autocmd({ 'BufWinEnter', 'BufEnter' }, {
+  desc = 'Use prose-friendly soft wrapping for unnamed buffers',
+  group = vim.api.nvim_create_augroup('kickstart-unnamed-prose', { clear = true }),
+  callback = function(args)
+    if vim.bo[args.buf].buftype ~= '' or vim.bo[args.buf].modifiable == false or vim.api.nvim_buf_get_name(args.buf) ~= '' then
+      return
+    end
+
+    set_prose_window_options(vim.api.nvim_get_current_win())
+  end,
+})
+
+vim.api.nvim_create_user_command('Scratch', function()
+  local columns = vim.o.columns
+  local lines = vim.o.lines - vim.o.cmdheight
+  local width = math.min(122, math.max(columns - 4, 60))
+  local height = math.max(math.floor(lines * 0.7), 12)
+
+  if not (scratch_buf and vim.api.nvim_buf_is_valid(scratch_buf)) then
+    scratch_buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[scratch_buf].bufhidden = 'hide'
+    vim.bo[scratch_buf].buflisted = false
+    vim.bo[scratch_buf].swapfile = false
+  end
+
+  local win = vim.api.nvim_open_win(scratch_buf, true, {
+    relative = 'editor',
+    width = width,
+    height = height,
+    row = math.floor((lines - height) / 2),
+    col = math.floor((columns - width) / 2),
+    style = 'minimal',
+    border = 'rounded',
+  })
+
+  vim.wo[win].number = false
+  vim.wo[win].relativenumber = false
+  vim.wo[win].signcolumn = 'no'
+  vim.wo[win].statuscolumn = ''
+  vim.wo[win].winbar = ''
+  vim.wo[win].cursorline = false
+  vim.wo[win].spell = true
+
+  set_prose_window_options(win)
+end, { desc = 'Open a centered scratch buffer for prose writing' })
+
+vim.cmd [[cnoreabbrev <expr> scratch getcmdtype() == ':' && getcmdline() ==# 'scratch' ? 'Scratch' : 'scratch']]
 
 -- [[ Install `lazy.nvim` plugin manager ]]
 --    See `:help lazy.nvim.txt` or https://github.com/folke/lazy.nvim for more info
@@ -504,6 +587,61 @@ require('lazy').setup({
 
       -- See `:help telescope.builtin`
       local builtin = require 'telescope.builtin'
+      local actions = require 'telescope.actions'
+      local action_state = require 'telescope.actions.state'
+      local conf = require('telescope.config').values
+      local finders = require 'telescope.finders'
+      local pickers = require 'telescope.pickers'
+      local previewers = require 'telescope.previewers'
+
+      local function modified_buffers()
+        local results = {}
+
+        for _, buf in ipairs(vim.fn.getbufinfo { buflisted = 1, bufmodified = 1 }) do
+          local name = buf.name ~= '' and vim.fn.fnamemodify(buf.name, ':~:.') or '[No Name]'
+          table.insert(results, {
+            bufnr = buf.bufnr,
+            display = string.format('[+] %s', name),
+            ordinal = name,
+          })
+        end
+
+        if vim.tbl_isempty(results) then
+          vim.notify('No modified buffers', vim.log.levels.INFO)
+          return
+        end
+
+        pickers
+          .new({}, {
+            prompt_title = 'Modified Buffers',
+            finder = finders.new_table {
+              results = results,
+              entry_maker = function(entry)
+                return {
+                  value = entry,
+                  display = entry.display,
+                  ordinal = entry.ordinal,
+                  bufnr = entry.bufnr,
+                  path = vim.api.nvim_buf_get_name(entry.bufnr),
+                }
+              end,
+            },
+            previewer = previewers.vim_buffer_cat.new {},
+            sorter = conf.generic_sorter {},
+            attach_mappings = function(prompt_bufnr)
+              actions.select_default:replace(function()
+                local selection = action_state.get_selected_entry()
+                actions.close(prompt_bufnr)
+                if selection then
+                  vim.cmd('buffer ' .. selection.bufnr)
+                end
+              end)
+              return true
+            end,
+          })
+          :find()
+      end
+
       vim.keymap.set('n', '<leader>sh', builtin.help_tags, { desc = '[S]earch [H]elp' })
       vim.keymap.set('n', '<leader>sk', builtin.keymaps, { desc = '[S]earch [K]eymaps' })
       vim.keymap.set('n', '<leader>sf', builtin.find_files, { desc = '[S]earch [F]iles' })
@@ -514,6 +652,7 @@ require('lazy').setup({
       vim.keymap.set('n', '<leader>sr', builtin.resume, { desc = '[S]earch [R]esume' })
       vim.keymap.set('n', '<leader>s.', builtin.oldfiles, { desc = '[S]earch Recent Files ("." for repeat)' })
       vim.keymap.set('n', '<leader><leader>', builtin.buffers, { desc = '[ ] Find existing buffers' })
+      vim.keymap.set('n', '<leader>bm', modified_buffers, { desc = '[B]uffers [M]odified' })
 
       -- Slightly advanced example of overriding default behavior and theme
       vim.keymap.set('n', '<leader>/', function()
@@ -994,6 +1133,10 @@ require('lazy').setup({
         styles = {
           comments = { italic = false }, -- Disable italics in comments
         },
+        on_highlights = function(highlights, colors)
+          highlights.WinSeparator = { fg = colors.blue, bold = true }
+          highlights.VertSplit = { fg = colors.blue, bold = true }
+        end,
       }
 
       -- Load the colorscheme here.

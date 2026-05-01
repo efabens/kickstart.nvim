@@ -11,21 +11,38 @@ return {
   },
   lazy = false,
   keys = {
-    { '\\', ':Neotree reveal<CR>', desc = 'NeoTree reveal', silent = true },
+    {
+      '\\',
+      function()
+        local command = require 'neo-tree.command'
+        local bufname = vim.api.nvim_buf_get_name(0)
+        local normalized = vim.fn.fnamemodify(bufname, ':p')
+        local is_file = bufname ~= '' and vim.fn.filereadable(normalized) == 1
+
+        if is_file then
+          command.execute { action = 'focus', source = 'filesystem', reveal_file = normalized }
+        else
+          command.execute { action = 'focus', source = 'filesystem', reveal = false, dir = vim.loop.cwd() }
+        end
+      end,
+      desc = 'NeoTree reveal',
+      silent = true,
+    },
     { '<leader>e', ':Neotree toggle<CR>', desc = 'Toggle file [E]xplorer', silent = true },
     {
       '<leader>o',
       function()
+        local command = require 'neo-tree.command'
         local manager = require 'neo-tree.sources.manager'
         local state = manager.get_state 'filesystem'
         local window_exists = state.winid and vim.api.nvim_win_is_valid(state.winid)
 
         if not window_exists then
-          vim.cmd 'Neotree focus'
+          command.execute { action = 'focus', source = 'filesystem', reveal = false, dir = vim.loop.cwd() }
         elseif vim.bo.filetype == 'neo-tree' then
           vim.cmd 'wincmd p'
         else
-          vim.cmd 'Neotree focus'
+          command.execute { action = 'focus', source = 'filesystem', reveal = false, dir = vim.loop.cwd() }
         end
       end,
       desc = '[O]pen/focus file browser',

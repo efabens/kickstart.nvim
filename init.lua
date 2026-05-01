@@ -90,6 +90,28 @@ P.S. You can delete this when you're done too. It's your config now! :)
 vim.g.mapleader = ' '
 vim.g.maplocalleader = ' '
 
+local function path_has_entry(entry)
+  for part in string.gmatch(vim.env.PATH or '', '([^:]+)') do
+    if part == entry then
+      return true
+    end
+  end
+  return false
+end
+
+local function prepend_path_if_dir(path)
+  if vim.fn.isdirectory(path) == 1 and not path_has_entry(path) then
+    vim.env.PATH = path .. ':' .. (vim.env.PATH or '')
+  end
+end
+
+-- Some VMs/shell setups don't export Homebrew formula bins consistently.
+-- Ensure Neovim can find tree-sitter CLI for nvim-treesitter(main).
+prepend_path_if_dir '/opt/homebrew/bin'
+prepend_path_if_dir '/opt/homebrew/sbin'
+prepend_path_if_dir '/opt/homebrew/opt/tree-sitter/bin'
+prepend_path_if_dir '/opt/homebrew/opt/tree-sitter/libexec/bin'
+
 vim.filetype.add {
   filename = {
     Tiltfile = 'bzl',
@@ -1237,21 +1259,51 @@ require('lazy').setup({
   },
   { -- Highlight, edit, and navigate code
     'nvim-treesitter/nvim-treesitter',
+    branch = 'main',
+    lazy = false,
     build = ':TSUpdate',
-    -- [[ Configure Treesitter ]] See `:help nvim-treesitter`
-    opts = {
-      ensure_installed = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'starlark', 'vim', 'vimdoc' },
-      -- Autoinstall languages that are not installed
-      auto_install = true,
-      highlight = {
-        enable = true,
-        -- Some languages depend on vim's regex highlighting system (such as Ruby) for indent rules.
-        --  If you are experiencing weird indenting issues, add the language to
-        --  the list of additional_vim_regex_highlighting and disabled languages for indent.
-        additional_vim_regex_highlighting = { 'ruby' },
-      },
-      indent = { enable = true, disable = { 'ruby' } },
-    },
+    config = function()
+      local treesitter = require 'nvim-treesitter'
+      local ensure_installed = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'starlark', 'vim', 'vimdoc' }
+      local install_dir = vim.fn.stdpath 'data' .. '/site'
+      local has_tree_sitter_cli = vim.fn.executable 'tree-sitter' == 1
+
+      -- Ensure parser/query install dir is discoverable by Neovim runtime.
+      vim.opt.rtp:prepend(install_dir)
+      treesitter.setup { install_dir = install_dir }
+
+      -- Install missing parsers once when CLI is present.
+      if has_tree_sitter_cli then
+        local installed = treesitter.get_installed()
+        local missing = vim.tbl_filter(function(lang)
+          return not vim.tbl_contains(installed, lang)
+        end, ensure_installed)
+        if #missing > 0 then
+          treesitter.install(missing, { summary = true })
+        end
+      end
+
+      vim.api.nvim_create_autocmd('FileType', {
+        desc = 'Enable Tree-sitter highlighting and indentation',
+        group = vim.api.nvim_create_augroup('kickstart-treesitter-features', { clear = true }),
+        callback = function(event)
+          local ft = vim.bo[event.buf].filetype
+
+          -- Keep markdown on Vim regex highlighting to avoid intermittent injection crashes.
+          if ft == 'markdown' then
+            return
+          end
+
+          if not pcall(vim.treesitter.start, event.buf) then
+            return
+          end
+
+          if ft ~= 'ruby' then
+            vim.bo[event.buf].indentexpr = "v:lua.require'nvim-treesitter'.indentexpr()"
+          end
+        end,
+      })
+    end,
     -- There are additional nvim-treesitter modules that you can use to interact
     -- with nvim-treesitter. You should go explore a few and see what interests you:
     --

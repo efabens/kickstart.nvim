@@ -116,8 +116,17 @@ vim.filetype.add {
   filename = {
     Tiltfile = 'bzl',
   },
+  extension = {
+    yaml = 'yaml',
+    yml = 'yaml',
+    tf = 'terraform',
+    tfvars = 'terraform',
+    hcl = 'hcl',
+  },
   pattern = {
     ['.*/Tiltfile%..+'] = 'bzl',
+    ['.*%.terraform%.lock%.hcl'] = 'hcl',
+    ['.*%.tfvars%.json'] = 'json',
   },
 }
 
@@ -219,6 +228,9 @@ vim.keymap.set('i', 'JJ', '<Esc>')
 
 -- Diagnostic keymaps
 vim.keymap.set('n', '<leader>q', vim.diagnostic.setloclist, { desc = 'Open diagnostic [Q]uickfix list' })
+vim.keymap.set('n', '<leader>co', '<cmd>copen<CR>', { desc = '[C]quickfix [O]pen' })
+vim.keymap.set('n', '<leader>cn', '<cmd>cnext<CR>', { desc = '[C]quickfix [N]ext' })
+vim.keymap.set('n', '<leader>cp', '<cmd>cprev<CR>', { desc = '[C]quickfix [P]revious' })
 
 -- Quit all
 vim.keymap.set('n', '<leader>Q', '<cmd>qa<CR>', { desc = '[Q]uit all' })
@@ -227,7 +239,7 @@ vim.keymap.set('n', '<leader>Q', '<cmd>qa<CR>', { desc = '[Q]uit all' })
 vim.keymap.set('n', '<leader>ts', '<cmd>set spell!<CR>', { desc = '[T]oggle [S]pell' })
 
 local function insert_rpaste()
-  local lines = vim.fn.systemlist('/Users/efabens/code/scripts/rpaste')
+  local lines = vim.fn.systemlist '/Users/efabens/code/scripts/rpaste'
   if vim.v.shell_error ~= 0 then
     vim.notify('rpaste failed', vim.log.levels.ERROR)
     return
@@ -278,6 +290,29 @@ vim.keymap.set('n', '<leader>sq', function()
     print 'No spelling errors found'
   end
 end, { desc = '[S]pell [Q]uickfix' })
+
+-- Copy the repo-relative path + cursor line to the clipboard (e.g. lua/foo.lua:42)
+local function yank_repo_location()
+  local file = vim.api.nvim_buf_get_name(0)
+  if file == '' then
+    vim.notify('Buffer has no file name', vim.log.levels.WARN)
+    return
+  end
+  local root = vim.fs.root(file, '.git')
+  local path
+  if root then
+    path = vim.fs.relpath(root, file) or vim.fn.fnamemodify(file, ':t')
+  else
+    path = vim.fn.fnamemodify(file, ':~:.')
+  end
+  local line = vim.api.nvim_win_get_cursor(0)[1]
+  local location = string.format('%s:%d', path, line)
+  vim.fn.setreg('+', location)
+  vim.notify('Copied ' .. location)
+end
+
+vim.api.nvim_create_user_command('YankLocation', yank_repo_location, { desc = 'Copy repo-relative path:line to clipboard' })
+vim.keymap.set('n', '<leader>yl', yank_repo_location, { desc = '[Y]ank [L]ocation (repo path:line)' })
 
 -- Vertical split with empty buffer
 vim.keymap.set('n', '|', '<cmd>vnew<CR>', { desc = 'Vertical split (new buffer)' })
@@ -534,8 +569,10 @@ require('lazy').setup({
       spec = {
         { '<leader>s', group = '[S]earch' },
         { '<leader>t', group = '[T]oggle' },
+        { '<leader>c', group = '[C]quickfix' },
 
         { '<leader>g', group = '[G]it', mode = { 'n', 'v' } },
+        { '<leader>r', group = '[R]eview', mode = { 'n', 'v' } },
         { '<leader>b', group = '[B]uffer' },
         { '<leader>S', group = '[S]ession' },
         { '<leader>l', group = '[L]SP' },
@@ -957,22 +994,10 @@ require('lazy').setup({
         },
 
         terraformls = {
-          root_dir = require('lspconfig.util').root_pattern('.terraform', '.git', 'main.tf'),
-          settings = {
-            terraform = {
-              indexing = {
-                ignoreDirectoryNames = {
-                  'env',
-                  'venv',
-                  '.venv',
-                  'node_modules',
-                  '__pycache__',
-                  '.git',
-                  'site-packages',
-                },
-              },
-            },
-          },
+          root_markers = { 'main.tf', '.terraform' },
+        },
+        tflint = {
+          root_markers = { 'main.tf', '.terraform' },
         },
       }
 
@@ -996,19 +1021,24 @@ require('lazy').setup({
       })
       require('mason-tool-installer').setup { ensure_installed = ensure_installed }
 
+      for server_name, server in pairs(servers) do
+        server.capabilities = vim.tbl_deep_extend('force', {}, capabilities, server.capabilities or {})
+        local on_attach = server.on_attach
+        server.on_attach = function(client, bufnr)
+          if client.name == 'terraformls' then
+            client.server_capabilities.semanticTokensProvider = nil
+          end
+          if on_attach then
+            on_attach(client, bufnr)
+          end
+        end
+        vim.lsp.config(server_name, server)
+      end
+
       require('mason-lspconfig').setup {
         ensure_installed = {}, -- explicitly set to an empty table (Kickstart populates installs via mason-tool-installer)
         automatic_installation = false,
-        handlers = {
-          function(server_name)
-            local server = servers[server_name] or {}
-            -- This handles overriding only values explicitly passed
-            -- by the server configuration above. Useful when disabling
-            -- certain features of an LSP (for example, turning off formatting for ts_ls)
-            server.capabilities = vim.tbl_deep_extend('force', {}, capabilities, server.capabilities or {})
-            require('lspconfig')[server_name].setup(server)
-          end,
-        },
+        automatic_enable = vim.tbl_keys(servers or {}),
       }
     end,
   },
@@ -1200,16 +1230,16 @@ require('lazy').setup({
       -- - sd'   - [S]urround [D]elete [']quotes
       -- - sr)'  - [S]urround [R]eplace [)] [']
       require('mini.surround').setup {
-  mappings = {
-    add = 'gsa',
-    delete = 'gsd',
-    replace = 'gsr',
-    find = 'gsf',
-    find_left = 'gsF',
-    highlight = 'gsh',
-    update_n_lines = 'gsn',
-  },
-}
+        mappings = {
+          add = 'gsa',
+          delete = 'gsd',
+          replace = 'gsr',
+          find = 'gsf',
+          find_left = 'gsF',
+          highlight = 'gsh',
+          update_n_lines = 'gsn',
+        },
+      }
 
       -- Simple and easy statusline.
       --  You could remove this setup call if you don't like it,
@@ -1264,7 +1294,27 @@ require('lazy').setup({
     build = ':TSUpdate',
     config = function()
       local treesitter = require 'nvim-treesitter'
-      local ensure_installed = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'starlark', 'vim', 'vimdoc' }
+      local ensure_installed = {
+        'bash',
+        'c',
+        'diff',
+        'go',
+        'gomod',
+        'gosum',
+        'gowork',
+        'hcl',
+        'html',
+        'lua',
+        'luadoc',
+        'markdown',
+        'markdown_inline',
+        'query',
+        'starlark',
+        'terraform',
+        'yaml',
+        'vim',
+        'vimdoc',
+      }
       local install_dir = vim.fn.stdpath 'data' .. '/site'
       local has_tree_sitter_cli = vim.fn.executable 'tree-sitter' == 1
 
@@ -1296,6 +1346,12 @@ require('lazy').setup({
 
           if not pcall(vim.treesitter.start, event.buf) then
             return
+          end
+
+          -- Keep regex syntax highlighting alongside Tree-sitter for Terraform/HCL.
+          -- This avoids full highlight dropouts on some multiline comment patterns.
+          if ft == 'terraform' or ft == 'hcl' then
+            vim.bo[event.buf].syntax = 'on'
           end
 
           if ft ~= 'ruby' then
